@@ -137,9 +137,9 @@ def evaluate_early_entry(
         qualified = False
         reasons.extend(wallet_evidence.get("reasons") or ["suspicious wallet evidence"])
     concentration = wallet_evidence.get("holder_concentration") or {}
-    if concentration.get("available") and wallet_evidence.get("low_manipulation") is False:
+    if not concentration.get("available") or wallet_evidence.get("low_manipulation") is not True:
         qualified = False
-        reasons.append("available holder distribution does not pass the existing low-manipulation screen")
+        reasons.append("verified holder-concentration evidence is required for an early-entry call")
 
     independent_confirmation = (
         "positive price momentum" in names

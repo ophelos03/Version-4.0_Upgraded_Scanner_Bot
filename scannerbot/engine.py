@@ -14,7 +14,9 @@ from .dexscreener import DexScreenerClient
 from .dexpaprika import DexPaprikaClient
 from .discovery import DiscoveryCheckpointStore, ShrineDiscovery, ShrineAdvancedDiscovery, ShrineReplayBackfill, PumpPortalDiscovery
 from .features import build_features, wash_trading_flags
-from .early_momentum import (EarlyMomentumArchive, SolanaEvidenceClient, classify_early_momentum,\n                             evaluate_early_entry, early_entry_signal_reasons,\n                             early_lookup_priority_signal_count)
+from .early_momentum import (EarlyMomentumArchive, SolanaEvidenceClient, classify_early_momentum,
+                             evaluate_early_entry,
+                             early_lookup_priority_signal_count)
 from .models import Candidate, canonical_token_key, is_valid_solana_mint, solana_mint_validation_reason
 from .prediction.predictor import UpsidePredictor
 from .scoring import analyse_pair
@@ -54,7 +56,8 @@ class ScannerEngine:
                 ))
         if settings.enable_pumpportal:
             self.discovery.append(PumpPortalDiscovery(self.on_candidate, settings.pumpportal_api_key))
-        self._last_lookup: dict[tuple[str, str], float] = {}\n        self._early_lookup_priority: dict[tuple[str, str], float] = {}
+        self._last_lookup: dict[tuple[str, str], float] = {}
+        self._early_lookup_priority: dict[tuple[str, str], float] = {}
         self._last_dex_discovery = 0.0
         self._security_cache: dict[str, tuple[float, bool, str, float | None, list[str]]] = {}
         self._last_prune = 0.0
@@ -653,13 +656,20 @@ class ScannerEngine:
     async def run(self):
         try:
             await self.telegram.send(
-                "🟢 ScannerBot v2.0 started\n"
-                "Chain: Solana\n"
-                "Mode: " + self.mode + "\n"
-                "Discovery: " + (", ".join(type(d).__name__ for d in self.discovery) or "disabled") + "\n"
-                "ML models: " + (self.predictor.version if self.predictor.ready else "not ready — market scoring/watchlist mode") + "\n"
-                "RugCheck: enabled in both modes; UNKNOWN/rejected reports block qualified alerts\n"
-                "Training: " + ("automatic" if self.settings.auto_train_enabled else "disabled") + "\n"
+                "🟢 ScannerBot v2.0 started
+"
+                "Chain: Solana
+"
+                "Mode: " + self.mode + "
+"
+                "Discovery: " + (", ".join(type(d).__name__ for d in self.discovery) or "disabled") + "
+"
+                "ML models: " + (self.predictor.version if self.predictor.ready else "not ready — market scoring/watchlist mode") + "
+"
+                "RugCheck: enabled in both modes; UNKNOWN/rejected reports block qualified alerts
+"
+                "Training: " + ("automatic" if self.settings.auto_train_enabled else "disabled") + "
+"
                 "Read-only: no wallet keys, swaps or auto-buy."
             )
         except Exception as exc:

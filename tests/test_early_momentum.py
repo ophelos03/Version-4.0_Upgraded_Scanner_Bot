@@ -76,3 +76,68 @@ def test_zero_price_is_recorded_as_crash_not_missing_data(tmp_path):
     ).fetchone()
     assert tuple(row) == (0.0, 0)
     db.close()
+
+
+
+def test_early_entry_requires_target_band_confirmation_and_independent_signals():
+    from scannerbot.early_momentum import evaluate_early_entry
+
+    features = {
+        "price_change_m5_pct": 3.0,
+        "price_return_since_snapshot_pct": 1.5,
+        "volume_acceleration_5m_vs_hour": 1.8,
+        "transaction_acceleration_5m_vs_hour": 1.7,
+        "buy_share_m5": 0.68,
+        "transactions_m5": 20,
+        "liquidity_change_since_snapshot_pct": 1.0,
+        "snapshot_interval_seconds": 60,
+    }
+    history = [{"price_usd": 1.0}]
+    safe_wallet_evidence = {
+        "low_manipulation": True,
+        "holder_concentration": {"available": True, "sampled_owner_count": 20},
+    }
+    result = evaluate_early_entry(features, 17500, history, safe_wallet_evidence)
+    assert result["qualified"] is True
+    assert result["score"] >= 60
+
+    assert evaluate_early_entry(features, 22000, history, safe_wallet_evidence)["qualified"] is False
+    assert evaluate_early_entry(features, 17500, [], safe_wallet_evidence)["qualified"] is False
+    assert evaluate_early_entry(features, 17500, history, {})["qualified"] is False
+    assert evaluate_early_entry(
+        features, 17500, history, {"suspicious": True, "reasons": ["suspicious holder flow"]}
+    )["qualified"] is False
+
+
+def test_early_entry_requires_price_buy_pressure_and_acceleration():
+    from scannerbot.early_momentum import evaluate_early_entry
+
+    features = {
+        "price_change_m5_pct": 3.0,
+        "volume_acceleration_5m_vs_hour": 1.8,
+        "buy_share_m5": 0.68,
+        "transactions_m5": 20,
+        "snapshot_interval_seconds": 60,
+    }
+    evidence = {
+        "low_manipulation": True,
+        "holder_concentration": {"available": True, "sampled_owner_count": 20},
+    }
+    result = evaluate_early_entry(features, 17500, [{"price_usd": 1.0}], evidence)
+    assert result["qualified"] is True
+
+    features["buy_share_m5"] = 0.49
+    assert evaluate_early_entry(features, 17500, [{"price_usd": 1.0}], evidence)["qualified"] is False
+
+
+def test_early_lookup_priority_is_limited_to_low_market_caps():
+    from scannerbot.early_momentum import early_lookup_priority_signal_count
+
+    features = {
+        "price_change_m5_pct": 3.0,
+        "volume_acceleration_5m_vs_hour": 1.8,
+        "buy_share_m5": 0.68,
+        "transactions_m5": 20,
+    }
+    assert early_lookup_priority_signal_count(features, 17500) >= 2
+    assert early_lookup_priority_signal_count(features, 30000) == 0

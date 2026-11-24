@@ -80,6 +80,98 @@ def classify_early_momentum(features: dict[str, Any], history: list[dict[str, An
             "market_cap_tier": tier, "evidence_quality": evidence_quality}
 
 
+def early_entry_signal_reasons(features: dict[str, Any]) -> list[str]:
+    """Return independent short-window signals suitable for early-entry evaluation."""
+    price_m5 = float(features.get("price_change_m5_pct") or 0)
+    price_delta = float(features.get("price_return_since_snapshot_pct") or 0)
+    volume_delta = float(features.get("volume_change_since_snapshot_pct") or 0)
+    volume_accel = float(features.get("volume_acceleration_5m_vs_hour") or 0)
+    tx_delta = float(features.get("transaction_change_since_snapshot_pct") or 0)
+    tx_accel = float(features.get("transaction_acceleration_5m_vs_hour") or 0)
+    buy_share = float(features.get("buy_share_m5") or 0)
+    txns = int(features.get("transactions_m5") or 0)
+    liquidity_delta = float(features.get("liquidity_change_since_snapshot_pct") or 0)
+    interval = float(features.get("snapshot_interval_seconds") or 0)
+
+    signals: list[str] = []
+    if price_m5 >= 2.0 or price_delta >= 1.0:
+        signals.append("positive price momentum")
+    if volume_accel >= 1.5 or volume_delta >= 20.0:
+        signals.append("accelerating 5m volume")
+    if tx_accel >= 1.5 or tx_delta >= 20.0:
+        signals.append("accelerating transaction flow")
+    if buy_share >= 0.60 and txns >= 8:
+        signals.append("buy pressure at or above 60%")
+    if 30 <= interval <= 180 and liquidity_delta >= -2.5:
+        signals.append("liquidity stable or increasing")
+    return signals
+
+
+def evaluate_early_entry(
+    features: dict[str, Any],
+    market_cap_usd: float | None,
+    history: list[dict[str, Any]] | None = None,
+    wallet_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Strict 15k–20k entry trigger; it supplements, never replaces, Stage 1/security gates."""
+    history = history or []
+    wallet_evidence = wallet_evidence or {}
+    try:
+        market_cap = float(market_cap_usd or 0)
+    except (TypeError, ValueError):
+        market_cap = 0.0
+
+    signals = early_entry_signal_reasons(features)
+    names = set(signals)
+    interval = float(features.get("snapshot_interval_seconds") or 0)
+    reasons: list[str] = []
+    qualified = True
+
+    if not 15000 <= market_cap <= 20000:
+        qualified = False
+        reasons.append("market cap is outside the $15k–$20k target band")
+    if not history or not 30 <= interval <= 180:
+        qualified = False
+        reasons.append("a recent confirming snapshot is not available")
+    if wallet_evidence.get("suspicious"):
+        qualified = False
+        reasons.extend(wallet_evidence.get("reasons") or ["suspicious wallet evidence"])
+    concentration = wallet_evidence.get("holder_concentration") or {}
+    if not concentration.get("available") or wallet_evidence.get("low_manipulation") is not True:
+        qualified = False
+        reasons.append("verified holder-concentration evidence is required for an early-entry call")
+
+    independent_confirmation = (
+        "positive price momentum" in names
+        and "buy pressure at or above 60%" in names
+        and bool({"accelerating 5m volume", "accelerating transaction flow"} & names)
+        and len(names) >= 3
+    )
+    if not independent_confirmation:
+        qualified = False
+        reasons.append("requires price momentum, buy pressure, and at least one independent acceleration signal")
+
+    if qualified:
+        reasons.append("early-entry momentum confirmed by at least three independent signals")
+    return {
+        "qualified": qualified,
+        "score": min(100, len(signals) * 20),
+        "signals": signals,
+        "reasons": reasons,
+    }
+
+
+def early_lookup_priority_signal_count(features: dict[str, Any], market_cap_usd: float | None) -> int:
+    """Count early signals for faster refresh of promising $10k–$25k candidates."""
+    try:
+        market_cap = float(market_cap_usd or 0)
+    except (TypeError, ValueError):
+        return 0
+    if not 10000 <= market_cap <= 25000:
+        return 0
+    return len(early_entry_signal_reasons(features))
+
+
 class EarlyMomentumArchive:
     """Additive tables in the existing training_archive.sqlite; no new database or volume."""
     def __init__(self, archive_path: str, max_wallet_mb: int = 10):

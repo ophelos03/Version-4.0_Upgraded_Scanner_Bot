@@ -656,20 +656,13 @@ class ScannerEngine:
     async def run(self):
         try:
             await self.telegram.send(
-                "🟢 ScannerBot v2.0 started
-"
-                "Chain: Solana
-"
-                "Mode: " + self.mode + "
-"
-                "Discovery: " + (", ".join(type(d).__name__ for d in self.discovery) or "disabled") + "
-"
-                "ML models: " + (self.predictor.version if self.predictor.ready else "not ready — market scoring/watchlist mode") + "
-"
-                "RugCheck: enabled in both modes; UNKNOWN/rejected reports block qualified alerts
-"
-                "Training: " + ("automatic" if self.settings.auto_train_enabled else "disabled") + "
-"
+                "🟢 ScannerBot v2.0 started\n"
+                "Chain: Solana\n"
+                "Mode: " + self.mode + "\n"
+                "Discovery: " + (", ".join(type(d).__name__ for d in self.discovery) or "disabled") + "\n"
+                "ML models: " + (self.predictor.version if self.predictor.ready else "not ready — market scoring/watchlist mode") + "\n"
+                "RugCheck: enabled in both modes; UNKNOWN/rejected reports block qualified alerts\n"
+                "Training: " + ("automatic" if self.settings.auto_train_enabled else "disabled") + "\n"
                 "Read-only: no wallet keys, swaps or auto-buy."
             )
         except Exception as exc:

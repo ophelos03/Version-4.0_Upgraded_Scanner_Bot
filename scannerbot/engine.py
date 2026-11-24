@@ -14,7 +14,7 @@ from .dexscreener import DexScreenerClient
 from .dexpaprika import DexPaprikaClient
 from .discovery import DiscoveryCheckpointStore, ShrineDiscovery, ShrineAdvancedDiscovery, ShrineReplayBackfill, PumpPortalDiscovery
 from .features import build_features, wash_trading_flags
-from .early_momentum import EarlyMomentumArchive, SolanaEvidenceClient, classify_early_momentum
+from .early_momentum import (EarlyMomentumArchive, SolanaEvidenceClient, classify_early_momentum,\n                             evaluate_early_entry, early_entry_signal_reasons,\n                             early_lookup_priority_signal_count)
 from .models import Candidate, canonical_token_key, is_valid_solana_mint, solana_mint_validation_reason
 from .prediction.predictor import UpsidePredictor
 from .scoring import analyse_pair
@@ -54,7 +54,7 @@ class ScannerEngine:
                 ))
         if settings.enable_pumpportal:
             self.discovery.append(PumpPortalDiscovery(self.on_candidate, settings.pumpportal_api_key))
-        self._last_lookup: dict[tuple[str, str], float] = {}
+        self._last_lookup: dict[tuple[str, str], float] = {}\n        self._early_lookup_priority: dict[tuple[str, str], float] = {}
         self._last_dex_discovery = 0.0
         self._security_cache: dict[str, tuple[float, bool, str, float | None, list[str]]] = {}
         self._last_prune = 0.0
@@ -77,6 +77,13 @@ class ScannerEngine:
                 evidence or {"source": "solana-rpc", "confidence": "candidate_only"},
                 captured_at=captured_at,
             )
+
+    def _mark_early_lookup_priority(self, key: tuple[str, str], now: float) -> None:
+        """Refresh promising low-cap candidates twice as often, with a bounded queue."""
+        self._early_lookup_priority[key] = now + 600
+        while len(self._early_lookup_priority) > 600:
+            oldest = min(self._early_lookup_priority, key=self._early_lookup_priority.get)
+            self._early_lookup_priority.pop(oldest, None)
 
     def _reject(self, reason: str, token: str, detail: str = "") -> None:
         self._gate_counts[reason] = self._gate_counts.get(reason, 0) + 1
@@ -295,6 +302,12 @@ class ScannerEngine:
             self._reject("transactions_below_minimum", token, f"{features['transactions_m5']} < {self.settings.min_transactions_5m}")
             return
 
+        priority_signal_count = early_lookup_priority_signal_count(features, analysis.market_cap)
+        if priority_signal_count >= 2:
+            self._mark_early_lookup_priority(token_key, now)
+        elif analysis.market_cap is not None and analysis.market_cap > 25000:
+            self._early_lookup_priority.pop(token_key, None)
+
         wallet_evidence = {}
         creator_wallet = None
         creator_evidence = None
@@ -357,9 +370,17 @@ class ScannerEngine:
                 wallet_evidence.setdefault("reasons", []).append(
                     "Holder concentration unavailable; wallet, bundle, funder and independent-buyer evidence is insufficient"
                 )
-        momentum = classify_early_momentum(
-            features, self.early_archive.recent_history(chain, token), wallet_evidence
+        momentum_history = self.early_archive.recent_history(chain, token)
+        momentum = classify_early_momentum(features, momentum_history, wallet_evidence)
+        early_entry = evaluate_early_entry(
+            features, analysis.market_cap, momentum_history, wallet_evidence
         )
+        features["early_entry_candidate"] = early_entry["qualified"]
+        features["early_entry_signal_score"] = early_entry["score"]
+        features["early_entry_signals"] = early_entry["signals"]
+        features["early_entry_reasons"] = early_entry["reasons"]
+        features["early_entry_qualified"] = False
+        features["early_entry_model_gate_bypassed"] = False
         features["early_momentum_classification"] = momentum["classification"]
         features["early_momentum_signals"] = momentum["signals"]
         features["early_momentum_cautions"] = momentum["cautions"]
@@ -399,6 +420,19 @@ class ScannerEngine:
                 self._reject("token_already_alerted", token)
             return
 
+        early_entry_qualified = bool(
+            passed
+            and early_entry["qualified"]
+            and analysis.score >= max(0.0, self.settings.min_premodel_score - 10.0)
+        )
+        features["early_entry_qualified"] = early_entry_qualified
+        if early_entry_qualified:
+            log.info(
+                "EARLY ENTRY QUALIFIED %s %s market_cap=$%.0f early_score=%d signals=%s",
+                chain, analysis.symbol, float(analysis.market_cap or 0),
+                int(early_entry["score"]), early_entry["signals"],
+            )
+
         self._stage1_period_passed.add(token_key)
         # Additive early-momentum observations; no Stage 1 filter or threshold is changed.
         self.db.save_snapshot(analysis)
@@ -415,13 +449,14 @@ class ScannerEngine:
             )
 
         if not self.predictor.ready:
-            if analysis.score < self.settings.min_premodel_score:
-                self._reject("premodel_score_below_minimum", token, f"{analysis.score:.0f} < {self.settings.min_premodel_score:.0f}")
+            if analysis.score < self.settings.min_premodel_score and not early_entry_qualified:
+                self._reject("premodel_score_below_minimum", token, f"{analysis.score:.0f} < {self.settings.min_premodel_score:.0f} and early-entry trigger not qualified")
                 return
             if self.db.should_alert(chain, token, self.settings.alert_cooldown_minutes):
                 if await self._send_alert_once(analysis, features, status, risk_score, risk_reasons):
                     self._record_dev_call_after_alert(creator_wallet, chain, token, price, now, creator_evidence)
-                    self._gate_counts["premodel_alert_sent"] = self._gate_counts.get("premodel_alert_sent", 0) + 1
+                    metric = "early_entry_alert_sent" if early_entry_qualified else "premodel_alert_sent"
+                    self._gate_counts[metric] = self._gate_counts.get(metric, 0) + 1
                 if self.db.alert_event(chain, token):
                     log.info("PRE-MODEL WATCHLIST ALERT SENT %s %s score=%.0f", chain, analysis.symbol, analysis.score)
             else:
@@ -440,20 +475,23 @@ class ScannerEngine:
             chain, token, now, age, probabilities["2x"], probabilities["5x"],
             probabilities["10x"], self.predictor.version,
         )
-        qualifies = (
+        model_qualifies = (
             probabilities["2x"] >= self.settings.min_probability_2x
             and (
                 probabilities["5x"] >= self.settings.min_probability_5x
                 or probabilities["10x"] >= self.settings.min_probability_10x
             )
         )
+        qualifies = model_qualifies or early_entry_qualified
+        features["early_entry_model_gate_bypassed"] = bool(early_entry_qualified and not model_qualifies)
         if qualifies and self.db.should_alert(chain, token, self.settings.alert_cooldown_minutes):
             if await self._send_alert_once(
                 analysis, features, status, risk_score, risk_reasons,
                 probabilities=probabilities, model_version=self.predictor.version,
             ):
                 self._record_dev_call_after_alert(creator_wallet, chain, token, price, now, creator_evidence)
-                self._gate_counts["model_alert_sent"] = self._gate_counts.get("model_alert_sent", 0) + 1
+                metric = "early_entry_model_gate_bypassed_alert_sent" if features.get("early_entry_model_gate_bypassed") else "model_alert_sent"
+                self._gate_counts[metric] = self._gate_counts.get(metric, 0) + 1
             if self.db.alert_event(chain, token):
                 log.info("MODEL-ACTIVE ALERT SENT %s %s", chain, analysis.symbol)
         elif not qualifies:
@@ -497,7 +535,15 @@ class ScannerEngine:
                 prior = self.db.recent_snapshots(*key, limit=1)
                 if prior:
                     last = float(prior[0]["captured_at"])
-            if now - last >= self.settings.pair_lookup_interval_seconds:
+            priority_until = self._early_lookup_priority.get(key, 0.0)
+            if priority_until and priority_until <= now:
+                self._early_lookup_priority.pop(key, None)
+                priority_until = 0.0
+            lookup_interval = (
+                min(self.settings.pair_lookup_interval_seconds, 30)
+                if priority_until > now else self.settings.pair_lookup_interval_seconds
+            )
+            if now - last >= lookup_interval:
                 self._last_lookup[key] = now
                 eligible.append(row)
         if eligible:

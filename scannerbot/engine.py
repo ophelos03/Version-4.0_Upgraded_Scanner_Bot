@@ -426,7 +426,7 @@ class ScannerEngine:
         early_entry_qualified = bool(
             passed
             and early_entry["qualified"]
-            and analysis.score >= max(0.0, self.settings.min_premodel_score - 10.0)
+            and analysis.score >= self.settings.min_premodel_score
         )
         features["early_entry_qualified"] = early_entry_qualified
         if early_entry_qualified:
@@ -452,8 +452,8 @@ class ScannerEngine:
             )
 
         if not self.predictor.ready:
-            if analysis.score < self.settings.min_premodel_score and not early_entry_qualified:
-                self._reject("premodel_score_below_minimum", token, f"{analysis.score:.0f} < {self.settings.min_premodel_score:.0f} and early-entry trigger not qualified")
+            if analysis.score < self.settings.min_premodel_score:
+                self._reject("premodel_score_below_minimum", token, f"{analysis.score:.0f} < {self.settings.min_premodel_score:.0f}")
                 return
             if self.db.should_alert(chain, token, self.settings.alert_cooldown_minutes):
                 if await self._send_alert_once(analysis, features, status, risk_score, risk_reasons):

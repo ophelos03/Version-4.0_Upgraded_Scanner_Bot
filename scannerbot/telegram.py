@@ -85,6 +85,8 @@ class Telegram:
             if security_status == "UNKNOWN" and not probabilities
             else ("MODEL-ACTIVE" if probabilities else "PRE-MODEL / WATCHLIST")
         )
+        if features.get("early_entry_qualified"):
+            mode = "EARLY ENTRY — " + mode
         title = a.symbol or "UNKNOWN"
         buy_total = int(features.get("buys_h1", a.buys_h1) or 0)
         sell_total = int(features.get("sells_h1", a.sells_h1) or 0)
@@ -112,6 +114,12 @@ class Telegram:
             lines.extend([
                 "",
                 f"Early momentum: {momentum.get('early_momentum_classification', 'INSUFFICIENT EVIDENCE')}",
+                f"Early-entry trigger: {'QUALIFIED' if features.get('early_entry_qualified') else 'not qualified'} (target $15k–$20k)",
+                "Early-entry evidence: " + (", ".join(features.get("early_entry_signals") or []) or "not established"),
+                *(
+                    ["ML probability gate was not met; this alert qualified through the separate early-momentum route"]
+                    if features.get("early_entry_model_gate_bypassed") else []
+                ),
                 f"Market-cap band: {momentum.get('early_momentum_market_cap_tier', 'unknown')}",
                 "Market-cap milestones: " + (", ".join(f"$ {int(x):,}" for x in momentum.get("market_cap_progression", [])) or "none reached yet"),
                 f"On-chain evidence: {momentum.get('wallet_evidence_quality', 'not available')}",
